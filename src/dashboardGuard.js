@@ -199,8 +199,21 @@ export const __test__ = {
   canAccessLocalOnlyRoute,
 };
 
+// Browser preflights never carry Authorization, so they must be answered before the API-key
+// gate. `Allow-Headers: *` does not cover Authorization per the CORS spec, so list it explicitly.
+const LLM_API_CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "*, Authorization, Content-Type, x-api-key, x-goog-api-key, anthropic-version, anthropic-beta",
+  "Access-Control-Max-Age": "86400",
+};
+
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
+
+  if (request.method === "OPTIONS" && isPublicLlmApi(pathname)) {
+    return new NextResponse(null, { status: 204, headers: LLM_API_CORS_HEADERS });
+  }
 
   // Local-only gate for spawn-capable / host-secret routes.
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {
@@ -218,7 +231,10 @@ export async function proxy(request) {
 
   if (isPublicLlmApi(pathname)) {
     if (await canAccessPublicLlmApi(request)) return NextResponse.next();
-    return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
+    return NextResponse.json(
+      { error: "API key required for remote API access" },
+      { status: 401, headers: { "Access-Control-Allow-Origin": "*" } },
+    );
   }
 
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
