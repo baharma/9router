@@ -18,11 +18,12 @@ Dashboard/gateway (run from repo root):
 ```bash
 cp .env.example .env
 npm install
-PORT=20128 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run dev   # dev (webpack, port 20127 by default via next dev)
+PORT=20128 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run dev   # dev (`next dev --port 20127`; use `npm run dev:webpack` to force webpack)
 npm run build && PORT=20128 HOSTNAME=0.0.0.0 npm run start           # production
 ```
 - Bun variants: `npm run dev:bun` / `build:bun` / `start:bun`.
-- Default runtime port is **20128** (dashboard at `/dashboard`, API at `/v1`).
+- Default runtime port is **20128** (dashboard at `/dashboard`, API at `/v1`). The bare `npm run dev`/`npm start` scripts hardcode `--port 20127`; pass `PORT=20128` as above (or your own flag) to get 20128.
+- `npm run build` runs `postbuild` (`scripts/copy-standalone-assets.mjs`), which the standalone/`custom-server.js` start path needs.
 - Lint: `npx eslint .` (config `eslint.config.mjs`, extends `eslint-config-next`).
 
 CLI package (`cli/`):
