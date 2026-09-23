@@ -45,8 +45,9 @@ npx vitest run unit/capabilities.test.js   # single file (path relative to tests
 > - 24 catalogued in `tests/__baseline__/known-fails.txt` (rtk, oauth-cursor-auto-import, translator-request-normalization, …).
 > - `unit/embeddings.cloud.test.js` imports `cloud/src/handlers/embeddings.js` — the `cloud/` worker dir is **not in this repo**, so it always fails here.
 > - `unit/xai-oauth-service.test.js` times out (5s) when the xAI endpoint-discovery fetch isn't reachable/mocked.
-> - `real/*.real.test.js` make live provider calls — need credentials, skip otherwise.
-- `*.real.test.js` under `tests/translator/real/` make live provider calls — skip unless credentials are set.
+> - `translator/real/*.real.test.js` make live provider calls — need credentials, skip otherwise.
+
+Regression gate: `npx vitest run --reporter=json --outputFile=/tmp/results.json && node __baseline__/verify-no-regression.mjs /tmp/results.json`. Caveat: it keys failures by splitting the file path on `/app/` (the Docker/CI checkout path), so outside a checkout at `/app` every failure looks like a regression — compare by eye against `known-fails.txt` instead.
 - Regression baselines: `tests/__baseline__/verify-*.mjs` compare against committed snapshots (providers, aliases, OAuth URLs). Run these after touching provider registry / alias logic.
 
 ## Architecture
@@ -56,7 +57,7 @@ Two authoritative docs already exist — read them before working in these areas
 - `open-sse/AGENTS.md` — the routing/translation engine's own conventions and "how to add a provider/executor/translator". **Read this before editing anything under `open-sse/`.**
 
 ### Request flow (the thing to understand first)
-`src/app/api/v1/*` route (Next rewrite maps `/v1/*` → `/api/v1/*` in `next.config.mjs`)
+`src/app/api/v1/*` route (Next rewrites in `next.config.mjs` map `/v1/*` → `/api/v1/*`, plus aliases: `/v1beta/*` for Gemini-format clients, `/codex/*` and `/responses` → `/api/v1/responses`, `/systemone`)
 → `src/sse/handlers/chat.js` (parse, combo expansion, account-selection loop)
 → `open-sse/handlers/chatCore.js` (detect source format, translate request, dispatch to executor, retry/refresh, stream setup)
 → `open-sse/executors/*` (per-provider upstream call; `default.js` handles any OpenAI-compatible provider)
@@ -71,14 +72,14 @@ Two authoritative docs already exist — read them before working in these areas
 - Never hardcode role/block/model strings — use `open-sse/translator/schema/` and `open-sse/config/` constants. Config-driven and DRY is enforced by convention here.
 
 ### Provider registry (`open-sse/providers/registry/*`)
-- One file per provider. `providers/registry/index.js` is an **auto-generated** static import list — regenerate it with `scripts/migrate-registry.mjs` / `injectDisplayToRegistry.mjs`, don't hand-edit.
+- One file per provider. `providers/registry/index.js` is a static import list (header says "auto-generated", but no generator exists in this repo — it's maintained by hand; some entries are intentionally commented out as hidden, e.g. devin-cli, windsurf). A new provider file must be imported **and** added to the exported array there. `scripts/migrate-registry.mjs` / `injectDisplayToRegistry.mjs` are one-off schema/display migrations over the per-provider files, not index generators.
 - Add a provider: copy `providers/REGISTRY_TEMPLATE.js`, add models to `config/providerModels.js`. Only add an executor for non-OpenAI-compatible upstreams.
 
 ### Persistence — IMPORTANT (ARCHITECTURE.md is stale here)
 State is **no longer `db.json`**. It's a SQLite layer under `src/lib/db/` with an adapter fallback chain (`driver.js`): `bun:sqlite` → `better-sqlite3` (optional native dep) → `node:sqlite` (Node ≥22.5) → `sql.js` (pure-JS fallback, always works). `better-sqlite3` is deliberately in `optionalDependencies` so install never fails without build tools.
 - `src/lib/localDb.js` is a **backward-compat shim** re-exporting `src/lib/db/index.js`. New code should import from `@/lib/db/index.js`; per-entity logic lives in `src/lib/db/repos/*`. Schema/migrations in `src/lib/db/migrations/`.
-- DB file location resolves via `src/lib/db/paths.js` (`DATA_DIR`, else `~/.9router/`).
-- Usage/logs (`src/lib/usageDb.js`, `usage.json` + `log.txt`) still live under `~/.9router` and do **not** follow `DATA_DIR`.
+- Data dir resolves via `src/lib/dataDir.js` (`DATA_DIR`, else `~/.9router/`, or `%APPDATA%\9router` on Windows; falls back to the default if `DATA_DIR` isn't writable). DB files live under `<dataDir>/db/` (`src/lib/db/paths.js`).
+- Usage/request logs are in the same SQLite layer; `src/lib/usageDb.js` is likewise just a shim re-exporting from `@/lib/db/index.js`.
 
 ### RTK token saver (`open-sse/rtk/`)
 Pre-translate hooks that compress `tool_result` content in-place to cut tokens. **Fail-open**: any error returns null and leaves the body untouched — never throw out of them. Skips `is_error`/`status:"error"` results to preserve traces.
