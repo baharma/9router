@@ -39,8 +39,6 @@ cd tests && npm install                 # then tests' own deps (vitest) → test
 npx vitest run                          # all tests; auto-discovers tests/vitest.config.js
 npx vitest run unit/capabilities.test.js   # single file (path relative to tests/)
 ```
-> The committed `tests/package.json` `test` script hardcodes Unix paths (`NODE_PATH=/tmp/node_modules …`) — a shared-install workaround from upstream. On Windows (or anywhere), ignore it and use the `npx vitest` form above; `vitest.config.js` resolves the `open-sse`/`@/` aliases from the repo root regardless of where vitest lives.
->
 > **The suite is NOT expected to be all-green on a plain checkout.** ~938 pass, ~64 fail. Judge regressions with `tests/__baseline__/verify-no-regression.mjs`, not a raw run. Expected red:
 > - 24 catalogued in `tests/__baseline__/known-fails.txt` (rtk, oauth-cursor-auto-import, translator-request-normalization, …).
 > - `unit/embeddings.cloud.test.js` imports `cloud/src/handlers/embeddings.js` — the `cloud/` worker dir is **not in this repo**, so it always fails here.
@@ -82,7 +80,8 @@ State is **no longer `db.json`**. It's a SQLite layer under `src/lib/db/` with a
 - Usage/request logs are in the same SQLite layer; `src/lib/usageDb.js` is likewise just a shim re-exporting from `@/lib/db/index.js`.
 
 ### RTK token saver (`open-sse/rtk/`)
-Pre-translate hooks that compress `tool_result` content in-place to cut tokens. **Fail-open**: any error returns null and leaves the body untouched — never throw out of them. Skips `is_error`/`status:"error"` results to preserve traces.
+Pre/post-translate hooks that compress `tool_result` content and inject system prompts to cut tokens. **Fail-open**: any error returns null and leaves the body untouched — never throw out of them. Skips `is_error`/`status:"error"` results to preserve traces.
+- `rtk/headroom.js` is a client for **Headroom**, a separate Python-based compression proxy. `src/lib/headroom/` (`detect.js`, `process.js`) finds/spawns it as an external subprocess (PID/log files under `<dataDir>/headroom/`) and `src/app/api/headroom/*` routes control it from the dashboard — it's process management, not just a library call.
 
 ## Conventions & gotchas
 
