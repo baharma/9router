@@ -1,0 +1,39 @@
+name: Deploy to server
+
+on:
+  push:
+    branches:
+      - kuinvatedia
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-kuinvatedia
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            REPO_DIR="/home/baharma/apps/9router"
+            BRANCH="kuinvatedia"
+
+            if [ -d "$REPO_DIR/.git" ]; then
+              cd "$REPO_DIR"
+              git fetch origin "$BRANCH"
+              git checkout "$BRANCH"
+              git reset --hard "origin/$BRANCH"
+            else
+              git clone -b "$BRANCH" https://github.com/baharma/9router.git "$REPO_DIR"
+              cd "$REPO_DIR"
+            fi
+
+            docker compose up -d --build
