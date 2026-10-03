@@ -56,6 +56,30 @@ export function addBufferToUsage(usage) {
   return result;
 }
 
+/**
+ * Per-request usage report for the caller's backend (no buffer tokens added).
+ * Attached as `x_9router` so it never collides with the standard `usage` field.
+ * `model` is the model that actually served the request, so combo members are
+ * reported individually.
+ */
+export function buildUsageReport(provider, model, usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const prompt = usage.prompt_tokens ?? usage.input_tokens ?? 0;
+  const completion = usage.completion_tokens ?? usage.output_tokens ?? 0;
+  const report = {
+    provider: provider || null,
+    model: model || null,
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: prompt + completion
+  };
+  const cached = usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens;
+  if (cached) report.cached_tokens = cached;
+  const reasoning = usage.reasoning_tokens ?? usage.completion_tokens_details?.reasoning_tokens;
+  if (reasoning) report.reasoning_tokens = reasoning;
+  return report;
+}
+
 export function filterUsageForFormat(usage, targetFormat) {
   if (!usage || typeof usage !== "object") return usage;
 

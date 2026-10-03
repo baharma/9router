@@ -2,7 +2,7 @@ import { FORMATS } from "../../translator/formats.js";
 import { needsTranslation } from "../../translator/index.js";
 import { fromOpenAIFinish } from "../../translator/concerns/finishReason.js";
 import { ollamaBodyToOpenAI } from "../../translator/response/ollama-to-openai.js";
-import { addBufferToUsage, filterUsageForFormat } from "../../utils/usageTracking.js";
+import { addBufferToUsage, filterUsageForFormat, buildUsageReport } from "../../utils/usageTracking.js";
 import { createErrorResult } from "../../utils/error.js";
 import { upstreamResponseHeaders } from "../../utils/upstreamHeaders.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
@@ -363,6 +363,12 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
 
   if (translatedResponse?.usage) {
     translatedResponse.usage = filterUsageForFormat(addBufferToUsage(translatedResponse.usage), sourceFormat);
+  }
+
+  // Exact per-request usage (no buffer) for the caller's backend accounting.
+  const usageReport = buildUsageReport(provider, model, usage);
+  if (usageReport && translatedResponse && typeof translatedResponse === "object") {
+    translatedResponse.x_9router = usageReport;
   }
 
   // Strip reasoning_content only when content is non-empty.
