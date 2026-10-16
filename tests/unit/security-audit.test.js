@@ -52,15 +52,18 @@ describe("AUDIT-002: API key masking", () => {
     expect(livePath.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("byApiKey object keys should use masked key, not raw key", () => {
+  // Internal aggregation deliberately keys on the FULL api key: masking there
+  // collided keys sharing a prefix (team keys) into a single bucket. The guard
+  // therefore covers what goes OUT: the returned object keys must be masked.
+  // The behavioural check lives in tests/unit/usage-api-key-attribution.test.js
+  // (AUDIT-002); this one is only a tripwire for the redaction step vanishing.
+  it("byApiKey field names are redacted before getUsageStats returns", () => {
     const source = fs.readFileSync(
       path.resolve(REPO_ROOT, "src/lib/db/repos/usageRepo.js"),
       "utf-8"
     );
-    // The 24h path should use apiKeyMasked in the akKey template
-    expect(source).toContain("${apiKeyMasked}|${r.model}|${r.provider");
-    // Should NOT use raw r.apiKey in the key
-    expect(source).not.toContain("${r.apiKey}|${r.model}|${r.provider");
+    expect(source).toContain("function withRedactedApiKeyBuckets");
+    expect(source).toContain("stats.byApiKey = withRedactedApiKeyBuckets(stats.byApiKey)");
   });
 });
 
