@@ -11,9 +11,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // Mock DNS so the SSRF guard treats example.com as public.
-// image.js resolves with { all: true } (DNS pinning, c7d07448) and expects an array.
+// The guard calls lookup(host, { all: true }) and expects an array of records.
 vi.mock("node:dns/promises", () => ({
-  lookup: async (_host, opts) => (opts?.all ? [{ address: "93.184.216.34", family: 4 }] : { address: "93.184.216.34", family: 4 }),
+  lookup: async (_host, opts) => {
+    const record = { address: "93.184.216.34", family: 4 };
+    return opts?.all ? [record] : record;
+  },
 }));
 
 import { CodexExecutor } from "../../open-sse/executors/codex.js";
