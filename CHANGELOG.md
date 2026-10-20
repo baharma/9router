@@ -4,6 +4,7 @@
 - **Thinking**: stop sending `thinkingLevel: "MINIMAL"` to the tiered Gemini 3.8/3.7/3.6 Flash family — those models serve `low|medium|high` only and 400 on MINIMAL ("Thinking level MINIMAL is not supported for this model"). The `gemini-level` format's default level set (`L.gemini`) carries "minimal" for the original Gemini 3 models that do have that tier, and the `applyFormat` clamp only fires for levels *outside* the declared set, so every intent that produces "minimal" (client `reasoning_effort: "none"`/`"minimal"`, a sub-768-token budget, a `(minimal)` model suffix, or the none→minimal clamp for can't-disable models) sailed through and reached Google as-is. Added `PATTERN_THINKING` rows for `*gemini-3.8*`/`*gemini-3.7*`/`*gemini-3.6*` declaring `["low","medium","high"]` (same shape as the existing `*gemini-4*` Argon row) — the clamp now floors such intents at `low` and the level picker no longer advertises "minimal" for the tiered family. Original Gemini 3 models (`gemini-3-flash-preview`, `gemini-3.1-pro-preview`, …) keep their MINIMAL tier.
 - **Production build**: keep HTTP route handlers out of React Server Function registration, preventing the webpack action-manifest crash when the CLI status endpoint imports other route handlers.
 - **Dashboard authentication**: persist token revocation before acknowledging logout; give password, OIDC and SAML logins unique session IDs, and consult the same revocation check in dashboard guards and auth status. API keys are unchanged. Legacy identical tokens represent one shared session and are revoked together; signing in again creates independent sessions. Failed revocation writes return a retryable error rather than a false success.
+- **Combos**: treat transient gateway statuses 408, 425 and 499 as account-fallback eligible while preserving request-scoped handling for other client errors (#4911).
 
 # v0.5.112 (2026-10-28)
 
@@ -45,6 +46,7 @@
 - **Thinking**: keep `reasoning_effort: max` for GPT-5.6 / GPT-6 served through OpenAI Compatible nodes instead of clamping it to `xhigh` (#5186)
 - **Codex Image**: drive the `image_generation` tool call from `gpt-6-sol` instead of the legacy `gpt-5.6-terra` host, and add `cx/gpt-6-sol-image`; drop the `gpt-5.6-{sol,terra,luna}-image` aliases they supersede
 - **Capabilities**: match `*gpt-6*image*` before the generic `gpt-6` family pattern so `gpt-6-sol-image` resolves as an image model instead of inheriting the chat caps (vision/reasoning/1.05M window) and losing `imageOutput`
+
 
 # v0.5.109 (2026-10-23)
 
@@ -92,6 +94,7 @@
 - **Search**: reset regex state between model matches in search filters (#5853a88)
 - **Pi Settings**: declare `existingProvider` before use in POST handler to prevent ReferenceError 500 (#342ecb0)
 - **Tests**: triage master test suite (GLM-5.2 effort, gpt-6.1-sol codex capabilities, image SSRF mocks, refresh known-fails) (#b6a9ca4)
+
 
 # v0.5.104 (2026-10-15)
 
