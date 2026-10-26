@@ -1566,7 +1566,6 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
                 size="sm"
                 disabled={testingModels}
                 loading={testingModels}
-                icon={testingModels ? undefined : "science"}
               >
                 {testingModels ? "Testing..." : "Test Models"}
               </Button>
