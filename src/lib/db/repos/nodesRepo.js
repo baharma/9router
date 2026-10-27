@@ -43,6 +43,10 @@ export async function getProviderNodes(filter = {}) {
   const where = [];
   const params = [];
   if (filter.type) { where.push("type = ?"); params.push(filter.type); }
+  else if (Array.isArray(filter.types) && filter.types.length) {
+    where.push(`type IN (${filter.types.map(() => "?").join(", ")})`);
+    params.push(...filter.types);
+  }
   const sql = `SELECT * FROM providerNodes${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`;
   return db.all(sql, params).map(rowToNode);
 }

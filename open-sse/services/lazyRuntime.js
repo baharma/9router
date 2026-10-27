@@ -11,7 +11,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { getWritableDataDir } from "../utils/writableDataDir.js";
 
@@ -44,6 +43,17 @@ function npmInstall(pkg, version) {
   });
 }
 
+// Everything here must stay invisible to webpack. In the Next server bundle its
+// parser rewrites a statically imported createRequire() with a non-literal
+// argument to `undefined` and turns non-literal import() into an empty context,
+// so runtime-dir loads failed with "Cannot read properties of undefined
+// (reading 'resolve')" in production builds (Docker) while dev worked.
+async function importFromRuntimeDir(pkg) {
+  const { createRequire } = await import(/* webpackIgnore: true */ "node:module");
+  const resolved = createRequire(path.join(getRuntimeDir(), "package.json")).resolve(pkg);
+  return import(/* webpackIgnore: true */ pathToFileURL(resolved).href);
+}
+
 const inflight = new Map();
 
 async function load(pkg) {
@@ -54,9 +64,8 @@ async function load(pkg) {
     if (!isModuleMissing(error)) throw error;
   }
   // 2) Already present in the runtime dir from a previous install.
-  const runtimeRequire = createRequire(path.join(getRuntimeDir(), "package.json"));
   try {
-    return await import(pathToFileURL(runtimeRequire.resolve(pkg)).href);
+    return await importFromRuntimeDir(pkg);
   } catch (error) {
     if (!isModuleMissing(error)) throw error;
   }
@@ -71,7 +80,7 @@ async function load(pkg) {
       `install it manually: cd "${dir}" && npm install ${pkg}@${version}`
     );
   }
-  return import(pathToFileURL(createRequire(path.join(dir, "package.json")).resolve(pkg)).href);
+  return importFromRuntimeDir(pkg);
 }
 
 export function loadRuntimeDep(pkg) {

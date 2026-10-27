@@ -10,12 +10,13 @@ const fx = vi.hoisted(() => ({
   keys: {},
 }));
 const mocks = vi.hoisted(() => ({
+  getSettings: vi.fn(async () => ({ requireApiKey: false, comboStrategy: "fallback" })),
   getProviderCredentials: vi.fn(),
   handleChatCore: vi.fn(),
 }));
 
 vi.mock("@/lib/localDb", () => ({
-  getSettings: async () => ({ requireApiKey: false, comboStrategy: "fallback" }),
+  getSettings: mocks.getSettings,
   getModelAliases: async () => ({}),
   getComboByName: async (name) => fx.combos.find((c) => c.name === name) || null,
   getProviderNodes: async () => [],
@@ -103,6 +104,11 @@ const chat = (model, k) => handleChat(post("/v1/chat/completions", { model, stre
 
 describe("chat (/v1/chat/completions, /v1/messages, /v1/responses all use handleChat)", () => {
   beforeEach(() => mocks.getProviderCredentials.mockResolvedValue({ connectionId: "conn", connectionName: "mock" }));
+
+  it("reads chat settings once across combo failover", async () => {
+    expect((await chat("Main", "sk-combo")).status).toBe(200);
+    expect(mocks.getSettings).toHaveBeenCalledTimes(1);
+  });
 
   it("unrestricted key reaches the provider for the combo and models", async () => {
     for (const m of ["Main", "openai/model-b"]) {
