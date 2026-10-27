@@ -32,6 +32,15 @@ function isModuleMissing(error) {
 function npmInstall(pkg, version) {
   const cwd = getRuntimeDir();
   fs.mkdirSync(cwd, { recursive: true });
+  // Minimal package.json so npm treats the runtime dir as the project root
+  // (same as cli/hooks/sqliteRuntime.js). Without it npm walks up to the nearest
+  // package.json — /app in the Docker image, where DATA_DIR=/app/data — installs
+  // into the app instead, and skips the package outright when the app lists it
+  // under devDependencies and NODE_ENV=production.
+  const pkgPath = path.join(cwd, "package.json");
+  if (!fs.existsSync(pkgPath)) {
+    fs.writeFileSync(pkgPath, JSON.stringify({ name: "9router-runtime", version: "1.0.0", private: true }, null, 2));
+  }
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   const args = ["install", "--no-audit", "--no-fund", "--prefer-online", `${pkg}@${version}`];
   return new Promise((resolve) => {
