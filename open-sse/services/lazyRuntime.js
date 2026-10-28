@@ -24,6 +24,14 @@ function getRuntimeDir() {
   return path.join(getWritableDataDir(), "runtime");
 }
 
+// A static node:module import gets stubbed by the server bundler, so
+// createRequire must be fetched at runtime for published builds to work.
+let createRequirePromise;
+function getCreateRequire() {
+  createRequirePromise ??= import(/* webpackIgnore: true */ "node:module").then((mod) => mod.createRequire);
+  return createRequirePromise;
+}
+
 function isModuleMissing(error) {
   const code = String(error?.code || "");
   return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
@@ -32,14 +40,10 @@ function isModuleMissing(error) {
 function npmInstall(pkg, version) {
   const cwd = getRuntimeDir();
   fs.mkdirSync(cwd, { recursive: true });
-  // Minimal package.json so npm treats the runtime dir as the project root
-  // (same as cli/hooks/sqliteRuntime.js). Without it npm walks up to the nearest
-  // package.json — /app in the Docker image, where DATA_DIR=/app/data — installs
-  // into the app instead, and skips the package outright when the app lists it
-  // under devDependencies and NODE_ENV=production.
-  const pkgPath = path.join(cwd, "package.json");
-  if (!fs.existsSync(pkgPath)) {
-    fs.writeFileSync(pkgPath, JSON.stringify({ name: "9router-runtime", version: "1.0.0", private: true }, null, 2));
+  // Anchor npm to the runtime dir so it can't adopt a parent package.json as install root.
+  const manifest = path.join(cwd, "package.json");
+  if (!fs.existsSync(manifest)) {
+    fs.writeFileSync(manifest, JSON.stringify({ name: "9router-runtime", private: true }, null, 2));
   }
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   const args = ["install", "--no-audit", "--no-fund", "--prefer-online", `${pkg}@${version}`];
@@ -52,15 +56,16 @@ function npmInstall(pkg, version) {
   });
 }
 
-// Everything here must stay invisible to webpack. In the Next server bundle its
-// parser rewrites a statically imported createRequire() with a non-literal
-// argument to `undefined` and turns non-literal import() into an empty context,
-// so runtime-dir loads failed with "Cannot read properties of undefined
-// (reading 'resolve')" in production builds (Docker) while dev worked.
-async function importFromRuntimeDir(pkg) {
-  const { createRequire } = await import(/* webpackIgnore: true */ "node:module");
-  const resolved = createRequire(path.join(getRuntimeDir(), "package.json")).resolve(pkg);
-  return import(/* webpackIgnore: true */ pathToFileURL(resolved).href);
+async function installIntoRuntime(pkg, version) {
+  const dir = getRuntimeDir();
+  const res = await npmInstall(pkg, version);
+  if (!res.ok) {
+    const reason = (res.stderr.match(/npm ERR! ?(.+)/) || [])[1] || res.stderr.split("\n").filter(Boolean).pop() || "unknown npm error";
+    throw new Error(
+      `${pkg} is missing and the on-demand install failed (${String(reason).slice(0, 160)}) — ` +
+      `install it manually: cd "${dir}" && npm install ${pkg}@${version}`
+    );
+  }
 }
 
 const inflight = new Map();
@@ -73,23 +78,26 @@ async function load(pkg) {
     if (!isModuleMissing(error)) throw error;
   }
   // 2) Already present in the runtime dir from a previous install.
+  const createRequire = await getCreateRequire();
+  const runtimeRequire = createRequire(path.join(getRuntimeDir(), "package.json"));
   try {
-    return await importFromRuntimeDir(pkg);
+    return await import(/* webpackIgnore: true */ pathToFileURL(runtimeRequire.resolve(pkg)).href);
   } catch (error) {
     if (!isModuleMissing(error)) throw error;
   }
   // 3) Download on demand, then import from the runtime dir.
   const version = LAZY_DEP_VERSIONS[pkg] || "latest";
-  const dir = getRuntimeDir();
-  const res = await npmInstall(pkg, version);
-  if (!res.ok) {
-    const reason = (res.stderr.match(/npm ERR! ?(.+)/) || [])[1] || res.stderr.split("\n").filter(Boolean).pop() || "unknown npm error";
-    throw new Error(
-      `${pkg} is missing and the on-demand install failed (${String(reason).slice(0, 160)}) — ` +
-      `install it manually: cd "${dir}" && npm install ${pkg}@${version}`
-    );
+  const runtimeImport = () => import(/* webpackIgnore: true */ pathToFileURL(runtimeRequire.resolve(pkg)).href);
+  await installIntoRuntime(pkg, version);
+  try {
+    return await runtimeImport();
+  } catch (error) {
+    // npm exits 0 even on partially-extracted installs; wipe and retry once.
+    if (!isModuleMissing(error)) throw error;
+    fs.rmSync(path.join(getRuntimeDir(), "node_modules", pkg), { recursive: true, force: true });
+    await installIntoRuntime(pkg, version);
+    return runtimeImport();
   }
-  return importFromRuntimeDir(pkg);
 }
 
 export function loadRuntimeDep(pkg) {
