@@ -279,6 +279,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
   let lastError = null;
   let lastStatus = null;
   let lastHeaders = null;
+  let accountAttempts = 0;
 
   const deadlineAt = Number.isFinite(attempt?.deadlineAt) ? attempt.deadlineAt : null;
 
@@ -322,6 +323,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
     // Use shared chatCore
     const chatSettings = requestContext.settings;
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
+    accountAttempts++;
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
@@ -366,7 +368,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
         await clearAccountError(credentials.connectionId, credentials, model);
         // "Consecutive" strikes: a success clears the breaker for this pair.
         clearAntigravityStrikes(credentials.connectionId, model);
-      }
+      },
+      routeMeta: { attempts: accountAttempts }
     });
 
     if (result.success) return result.response;

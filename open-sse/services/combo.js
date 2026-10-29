@@ -15,6 +15,7 @@ import {
   clearStickyComboSession,
   orderModelsByChoice,
 } from "./systemoneRouter.js";
+import { cloneResponseWithHeaders, routeResponseHeaders } from "../utils/upstreamHeaders.js";
 
 // Peek a 2xx combo response for real content. Returns null for non-SSE responses (leave
 // them untouched). For SSE, returns { outcome: "content"|"empty", finishReason, response }
@@ -539,7 +540,8 @@ export async function handleComboChat({
           }
 
           log.info("COMBO", `Model ${modelStr} succeeded`);
-          return result;
+          const { provider: wp, model: wm } = parseModel(modelStr);
+          return cloneResponseWithHeaders(result, routeResponseHeaders(wp, wm, comboName, i + 1));
         }
 
         if (peeked.outcome === "stalled") {
@@ -556,7 +558,8 @@ export async function handleComboChat({
 
         if (peeked.outcome === "content") {
           log.info("COMBO", `Model ${modelStr} succeeded${peeked.timedOut ? " (peek deadline; committed)" : ""}`);
-          return peeked.response;
+          const { provider: wp, model: wm } = parseModel(modelStr);
+          return cloneResponseWithHeaders(peeked.response, routeResponseHeaders(wp, wm, comboName, i + 1));
         }
 
         // Empty generation. Fall through to the next candidate unless this is a legitimately
@@ -566,7 +569,8 @@ export async function handleComboChat({
         const isLast = i === rotatedModels.length - 1;
         if (isNoRetryFinish(peeked.finishReason) || isLast) {
           log.warn("COMBO", `Model ${modelStr} returned empty (${reasonLabel}) — ${isNoRetryFinish(peeked.finishReason) ? "no-retry class" : "last candidate"}, returning as-is`);
-          return peeked.response;
+          const { provider: wp, model: wm } = parseModel(modelStr);
+          return cloneResponseWithHeaders(peeked.response, routeResponseHeaders(wp, wm, comboName, i + 1));
         }
 
         log.warn("COMBO", `Model ${modelStr} returned empty (${reasonLabel}) — falling through to next candidate`);
