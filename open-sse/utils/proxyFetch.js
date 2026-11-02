@@ -255,6 +255,9 @@ async function fetchWithTlsFallback(url, options, proxyUrl) {
   try {
     // Protocol adapters may need Node's HTTP/1 transport on the direct path.
     // Keep proxy/no-proxy resolution and strict-proxy enforcement here.
+    // Adapters that impersonate a client TLS fingerprint own the proxied hop too:
+    // undici would re-handshake with Node's ClientHello and trip the upstream gate.
+    if (options.fingerprintFetch) return await options.fingerprintFetch(url, options, proxyUrl);
     if (!proxyUrl && options.directFetch) return await options.directFetch(url, options);
     const dispatcher = proxyUrl ? await getDispatcher(proxyUrl) : undefined;
     return await originalFetch(url, dispatcher ? { ...options, dispatcher } : options);
