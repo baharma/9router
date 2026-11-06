@@ -3,6 +3,8 @@ import { getComboById } from "@/lib/localDb";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { pingModelByKind } from "@/app/api/models/test/ping";
 
+const MAX_TEST_MODELS = 50;
+
 /**
  * POST /api/combos/[id]/test-models
  * Tests combo models in sequential order to prevent connection saturation, rate-limits, and timeouts.
@@ -16,7 +18,12 @@ export async function POST(request, { params }) {
     let kind = body.kind || "llm";
 
     if (Array.isArray(body.models) && body.models.length > 0) {
-      models = body.models;
+      // Draft lists come from the client: accept model id strings only, and cap the
+      // count — every entry is a real upstream call billed to the operator's accounts.
+      if (body.models.length > MAX_TEST_MODELS || !body.models.every((m) => typeof m === "string" && m.trim() && m.length <= 256)) {
+        return NextResponse.json({ error: `models must be 1-${MAX_TEST_MODELS} model id strings` }, { status: 400 });
+      }
+      models = body.models.map((m) => m.trim());
     } else if (id && id !== "draft") {
       const combo = await getComboById(id);
       if (!combo) {

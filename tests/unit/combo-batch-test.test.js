@@ -123,3 +123,22 @@ describe("POST /api/combos/[id]/test-models", () => {
     expect(getComboById).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/combos/[id]/test-models — draft input validation", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it("rejects non-string or oversized draft model lists without probing", async () => {
+    const { POST } = await import("../../src/app/api/combos/[id]/test-models/route.js");
+    const bad = [
+      { models: [{ evil: true }] },
+      { models: ["ok/model", 42] },
+      { models: ["   "] },
+      { models: Array.from({ length: 51 }, (_, i) => `p/m${i}`) },
+    ];
+    for (const body of bad) {
+      const request = new Request("http://localhost/api/combos/draft/test-models", { method: "POST", body: JSON.stringify(body) });
+      const res = await POST(request, { params: Promise.resolve({ id: "draft" }) });
+      expect(res.status).toBe(400);
+    }
+    expect(pingModelByKind).not.toHaveBeenCalled();
+  });
+});
