@@ -96,6 +96,9 @@ export async function parseUpstreamError(response, executor = null) {
  * @param {number} [resetsAtMs] - Optional precise cooldown expiry (ms epoch) for provider-specific quota errors
  * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number }}
  */
+// Message chatCore puts on the 499 it returns when the client's own request was aborted.
+export const CLIENT_ABORTED_MESSAGE = "Request aborted";
+
 export function createErrorResult(statusCode, message, resetsAtMs, extraHeaders = null) {
   return {
     success: false,

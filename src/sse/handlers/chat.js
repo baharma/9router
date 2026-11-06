@@ -14,7 +14,7 @@ import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
 import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
 import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
-import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
+import { errorResponse, unavailableResponse, CLIENT_ABORTED_MESSAGE } from "open-sse/utils/error.js";
 import { upstreamResponseHeaders } from "open-sse/utils/upstreamHeaders.js";
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
 import { getSpeedMode } from "open-sse/services/modelSpeed.js";
@@ -386,6 +386,13 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
 
     // Combo budget ran out on this member: not an account fault — no lock, no next account.
     if (result.attemptTimedOut) return result.response;
+
+    // Our own client went away (chatCore maps that abort to 499 "Request aborted"). 499 is
+    // fallback-eligible for upstream edge proxies (#5054), but here nobody is waiting:
+    // do not lock this account and do not spend another one on an abandoned request.
+    if (result.status === 499 && (request?.signal?.aborted || result.error === CLIENT_ABORTED_MESSAGE)) {
+      return result.response;
+    }
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;
