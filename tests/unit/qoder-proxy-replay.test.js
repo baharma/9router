@@ -81,7 +81,19 @@ describe("Qoder signed inference transport", () => {
     expect(result.response.ok).toBe(true);
     await result.response.text();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(!!fetchMock.mock.calls[0][1].dispatcher).toBe(useProxy);
+    // Direct calls also carry a dispatcher now (capped keep-alive Agent); only the proxy path uses ProxyAgent.
+    expect(fetchMock.mock.calls[0][1].dispatcher?.constructor?.name).toBe(useProxy ? "ProxyAgent" : "Agent");
+  });
+
+  it("does not replay a signed POST on the direct path when the pooled socket dies", async () => {
+    const fetchMock = vi.fn(async () => {
+      const err = new TypeError("fetch failed");
+      err.cause = { code: "ECONNRESET" };
+      throw err;
+    });
+    const executor = await loadExecutor(fetchMock, false);
+    await expect(executor.execute(request)).rejects.toThrow("fetch failed");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves caller cancellation without replaying the request", async () => {

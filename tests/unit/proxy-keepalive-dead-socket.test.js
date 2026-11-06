@@ -139,7 +139,9 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
     }
   });
 
-  it("BaseExecutor.execute sets forceFreshSocket=true when retrying after connect timeout or 502", async () => {
+  // A connect timeout is not retried on the same url (combo moves on; see base-executor-retry);
+  // other network errors are, and the retry must draw a fresh socket.
+  it("BaseExecutor.execute sets forceFreshSocket=true when retrying after a network error", async () => {
     const fetchMock = vi.fn();
     vi.doMock("../../open-sse/utils/proxyFetch.js", () => ({
       proxyAwareFetch: (...args) => fetchMock(...args),
@@ -153,13 +155,11 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
     });
 
     fetchMock
-      .mockImplementationOnce((_url, opts) => new Promise((_resolve, reject) => {
-        opts.signal.addEventListener("abort", () => {
-          const err = new Error("fetch connect timeout");
-          err.name = "AbortError";
-          reject(err);
-        });
-      }))
+      .mockImplementationOnce(async () => {
+        const err = new Error("fetch failed");
+        err.cause = { code: "ECONNRESET" };
+        throw err;
+      })
       .mockResolvedValueOnce({ status: 200, headers: { get: () => "application/json" } });
 
     const out = await ex.execute({

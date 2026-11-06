@@ -347,9 +347,11 @@ async function fetchWithTlsFallback(url, options, proxyUrl, forceFreshSocket = f
   } catch (err) {
     // Stale keep-alive socket recovery: if a pooled socket died before returning headers,
     // immediately retry once on the dedicated fresh-socket dispatcher (`keepAliveTimeout=1ms`).
+    // Never for requests that must not be replayed (signed one-shot POSTs, e.g. Qoder COSY).
     if (
       !proxyUrl
       && !forceFreshSocket
+      && !options.noReplay
       && !options.directFetch
       && !options.signal?.aborted
       && isBodyReplaySafe(options.body)
@@ -454,6 +456,8 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   const envProxyUrl = connectionProxyUrl ? null : normalizeProxyUrl(getEnvProxyUrl(targetUrl));
   const proxyUrl = connectionProxyUrl || envProxyUrl;
   const forceFreshSocket = proxyOptions?.forceFreshSocket === true || options?.forceFreshSocket === true;
+  // proxyOptions.noReplay: the caller forbids any transport-level resend of this request.
+  if (proxyOptions?.noReplay === true && !options.noReplay) options = { ...options, noReplay: true };
 
   // MITM DNS bypass: for known MITM-intercepted hosts, resolve real IP to avoid DNS spoof
   if (shouldBypassMitmDns(targetUrl)) {
