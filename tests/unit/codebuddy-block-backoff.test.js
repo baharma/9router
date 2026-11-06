@@ -76,7 +76,10 @@ describe("CodeBuddy Intl block backoff (#5024)", () => {
       log: { info: vi.fn(), warn: vi.fn() },
       comboName: "blocked-combo", comboStrategy: "fallback",
     });
-    expect(result).toBe(backup);
+    // Served as a clone carrying x-9router-* route headers (#5313): compare what it carries.
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ choices: [{ message: { content: "backup response" } }] });
+    expect(result.headers.get("x-9router-model")).toBe("backup-model");
     expect(dispatch.mock.calls.map(([, model]) => model)).toEqual([
       `${provider}/test-model`, "openai/backup-model",
     ]);
