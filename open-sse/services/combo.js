@@ -8,6 +8,7 @@ import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { parseModel } from "./model.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
 import { peekStreamForContent, reconstructStream, isNoRetryFinish } from "./emptyFailover.js";
+import { COMBO_MODEL_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import {
   getStickyComboModel,
   setStickyComboModel,
@@ -18,16 +19,26 @@ import {
 // Peek a 2xx combo response for real content. Returns null for non-SSE responses (leave
 // them untouched). For SSE, returns { outcome: "content"|"empty", finishReason, response }
 // where `response` is a faithful replay of the original stream (head buffer + live reader).
-async function peekComboResponse(result, log) {
+async function peekComboResponse(result, log, deadlineAt = null) {
   const ct = (result.headers.get("content-type") || "").toLowerCase();
   if (!result.body || !ct.includes("text/event-stream")) return null;
-  const peeked = await peekStreamForContent(result.body);
+  // Budgeted member: it must show a live frame by the deadline or it is "stalled".
+  const aliveDeadlineMs = Number.isFinite(deadlineAt) ? Math.max(1, deadlineAt - Date.now()) : null;
+  const peeked = await peekStreamForContent(result.body, { aliveDeadlineMs });
   const response = new Response(reconstructStream(peeked.head, peeked.reader, peeked.pendingRead), {
     status: result.status,
     statusText: result.statusText,
     headers: result.headers,
   });
   return { outcome: peeked.outcome, finishReason: peeked.finishReason, timedOut: peeked.timedOut, response };
+}
+
+// Per-combo override (comboStrategies[name].modelTimeoutMs) wins when it is a number >= 0
+// (0 disables); anything else (unset, "", garbage) falls back to COMBO_MODEL_TIMEOUT_MS.
+export function resolveModelBudgetMs(value) {
+  if (value === undefined || value === null || value === "") return COMBO_MODEL_TIMEOUT_MS;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : COMBO_MODEL_TIMEOUT_MS;
 }
 
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
@@ -349,6 +360,7 @@ export function isZeroContentResponse(data) {
  * @param {boolean} [options.sessionSticky=true] - Keep chosen model across session requests to retain prompt cache
  * @param {number} [options.confidenceThreshold=0.8] - Minimum confidence required for model switch (0-1)
  * @param {Function|null} [options.resolveSmartChoice=null] - Smart router resolver callback: (body, models) => Promise<{ choice, probabilities, confidence } | null>
+ * @param {number} [options.modelTimeoutMs=COMBO_MODEL_TIMEOUT_MS] - Per-member response budget (ms) for every member but the last; 0 disables
  * @returns {Promise<Response>}
  */
 export async function handleComboChat({
@@ -365,7 +377,9 @@ export async function handleComboChat({
   sessionSticky = true,
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
+  modelTimeoutMs,
 }) {
+  const budgetMs = resolveModelBudgetMs(modelTimeoutMs);
   let rotatedModels = models;
   let activeStickyModel = null;
 
@@ -472,8 +486,13 @@ export async function handleComboChat({
     const modelStr = rotatedModels[i];
     log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
 
+    // Every member but the last gets a response budget; the last has nowhere to fall back to.
+    const deadlineAt = budgetMs > 0 && i < rotatedModels.length - 1 ? Date.now() + budgetMs : null;
+
     try {
-      const result = await handleSingleModel(body, modelStr);
+      const result = deadlineAt
+        ? await handleSingleModel(body, modelStr, { deadlineAt })
+        : await handleSingleModel(body, modelStr);
       
       // Success (2xx). A 2xx is necessary but NOT sufficient: Gemini aborts (e.g.
       // MALFORMED_FUNCTION_CALL) still return 200 and stream empty content, which would
@@ -482,7 +501,7 @@ export async function handleComboChat({
       if (result.ok) {
         let peeked = null;
         try {
-          peeked = await peekComboResponse(result, log);
+          peeked = await peekComboResponse(result, log, deadlineAt);
         } catch (peekErr) {
           // peekStreamForContent is written not to throw; if reconstruction/Response
           // construction ever does, result.body is already locked by getReader() and can no
@@ -521,6 +540,18 @@ export async function handleComboChat({
 
           log.info("COMBO", `Model ${modelStr} succeeded`);
           return result;
+        }
+
+        if (peeked.outcome === "stalled") {
+          // Headers came back but not a single live frame within the budget: treat as hung.
+          log.warn("COMBO", `Model ${modelStr} sent no data within ${budgetMs}ms — trying next`);
+          peeked.response.body?.cancel?.().catch(() => {});
+          if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
+            clearStickyComboSession(comboName, sessionId);
+          }
+          lastError = `no response within ${budgetMs}ms`;
+          if (!lastStatus) lastStatus = 504;
+          continue;
         }
 
         if (peeked.outcome === "content") {
@@ -602,7 +633,8 @@ export async function handleComboChat({
       // For transient errors (503/502/504), wait for cooldown before falling through
       // so a briefly-overloaded provider gets a chance to recover rather than being
       // skipped immediately (fixes: combo falls through on transient 503)
-      if (cooldownMs && cooldownMs > 0 && cooldownMs <= 5000 &&
+      // A budgeted member skips the wait: the budget's whole point is to move on promptly.
+      if (!deadlineAt && cooldownMs && cooldownMs > 0 && cooldownMs <= 5000 &&
           (result.status === 503 || result.status === 502 || result.status === 504)) {
         log.info("COMBO", `Model ${modelStr} transient ${result.status}, waiting ${cooldownMs}ms before next`);
         await new Promise(r => setTimeout(r, cooldownMs));

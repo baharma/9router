@@ -5,6 +5,8 @@ export const CLAUDE_EVENT = {
   CONTENT_BLOCK_START: "content_block_start",
   CONTENT_BLOCK_DELTA: "content_block_delta",
   MESSAGE_DELTA: "message_delta",
+  // Keep-alive only — carries no sign the model has started answering.
+  PING: "ping",
 };
 
 // Anthropic content_block_delta delta types.

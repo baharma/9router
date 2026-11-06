@@ -63,6 +63,18 @@ export const EMPTY_PEEK_DEADLINE_MS = envMs("EMPTY_PEEK_DEADLINE_MS", 45 * 1000)
 // Fetch connect timeout: abort if upstream doesn't return response headers within this duration
 export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 60 * 1000);
 
+// Combo per-member response budget: a streaming combo member (other than the last) that has
+// not started answering — response headers plus a first live SSE frame (reasoning counts) —
+// within this window is abandoned and the combo moves to the next member. Non-streaming
+// requests are exempt (their headers only arrive once the whole answer is generated).
+// Env: COMBO_MODEL_TIMEOUT_MS; "0" disables. Per-combo: comboStrategies[name].modelTimeoutMs.
+export const COMBO_MODEL_TIMEOUT_MS = (() => {
+  const raw = process.env.COMBO_MODEL_TIMEOUT_MS;
+  if (raw == null || raw === "") return 10 * 1000;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 10 * 1000;
+})();
+
 // Gemini native TTS fetch timeout: abort if Google does not return response headers in time.
 export const GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS = envMs("GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS", 45 * 1000);
 

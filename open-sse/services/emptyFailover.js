@@ -106,30 +106,44 @@ function inspectResponsesEvent(obj) {
   return { content, finishReason };
 }
 
+// "Alive" = the model has started answering, even if only reasoning so far. A delta counts
+// when any field other than `role` carries a value (the first frame often has role plus
+// empty strings). Used by the combo response budget to tell a slow thinker from a hung member.
+const hasValue = (v) => (typeof v === "string" ? v.length > 0 : Array.isArray(v) ? v.length > 0 : v != null);
+function deltaIsAlive(delta) {
+  if (!delta || typeof delta !== "object") return false;
+  return Object.entries(delta).some(([k, v]) => k !== "role" && hasValue(v));
+}
+
 // Inspect one complete client-format SSE line (parsed with the shared parseSSELine) and report
-// whether it carries content and/or a finish reason. Non-data lines and "[DONE]" carry nothing.
+// whether it carries content, a finish reason, and/or any sign of life (alive).
+// Non-data lines (comments / keep-alives) and "[DONE]" carry nothing.
 export function inspectSSELine(line) {
   const parsed = parseSSELine(line.trimStart());
-  if (!parsed || parsed.done) return { content: false, finishReason: null };
+  if (!parsed || parsed.done) return { content: false, finishReason: null, alive: false };
   if (typeof parsed.type === "string" && !Array.isArray(parsed.choices)) {
-    return parsed.type.startsWith(RESPONSES_EVENT_PREFIX) ? inspectResponsesEvent(parsed) : inspectClaudeEvent(parsed);
+    const info = parsed.type.startsWith(RESPONSES_EVENT_PREFIX) ? inspectResponsesEvent(parsed) : inspectClaudeEvent(parsed);
+    return { ...info, alive: parsed.type !== CLAUDE_EVENT.PING };
   }
-  let content = false, finishReason = null;
+  let content = false, finishReason = null, alive = hasValue(parsed.usage);
   for (const choice of parsed.choices || []) {
-    if (deltaHasClientContent(choice.delta || choice.message || {})) content = true;
-    if (choice.finish_reason) finishReason = choice.finish_reason;
+    const delta = choice.delta || choice.message || {};
+    if (deltaHasClientContent(delta)) content = true;
+    if (deltaIsAlive(delta)) alive = true;
+    if (choice.finish_reason) { finishReason = choice.finish_reason; alive = true; }
   }
-  return { content, finishReason };
+  return { content, finishReason, alive };
 }
 
 // Scan the COMPLETE lines of a decoded SSE buffer and update the running decision.
 // The trailing fragment (a line still being received) is not parsed — it is returned in
 // `state.pending` for the caller to prepend to the next chunk. `sawContent` latches true.
-export function scanSSEBuffer(text, state = { sawContent: false, finishReason: null }) {
+export function scanSSEBuffer(text, state = { sawContent: false, finishReason: null, alive: false }) {
   const lines = text.split("\n");
   state.pending = lines.pop();
   for (const line of lines) {
     const info = inspectSSELine(line);
+    if (info.alive || info.content) state.alive = true;
     if (info.content) state.sawContent = true;
     if (info.finishReason) state.finishReason = info.finishReason;
   }
@@ -149,11 +163,15 @@ export function isNoRetryFinish(finishReason) {
 // possibly-valid slow stream). Returns the decision, the buffered head bytes, the live reader,
 // and — if the deadline fired mid-read — the still-pending read() (`pendingRead`) so the caller
 // can resume from it WITHOUT abandoning the chunk it will deliver.
-export async function peekStreamForContent(body, { deadlineMs = EMPTY_PEEK_DEADLINE_MS } = {}) {
+//
+// aliveDeadlineMs (optional, combo response budget): if not one live frame (see inspectSSELine
+// `alive`) has arrived by then, the peek ends with outcome "stalled" so the combo can move on.
+// Once the stream is alive this timer no longer matters and the content deadline governs.
+export async function peekStreamForContent(body, { deadlineMs = EMPTY_PEEK_DEADLINE_MS, aliveDeadlineMs = null } = {}) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const headChunks = [];
-  const state = { sawContent: false, finishReason: null };
+  const state = { sawContent: false, finishReason: null, alive: false };
   let textBuf = "";
 
   // Clamp: 0 / NaN / negative would otherwise disable the timeout and let a stalled-but-open
@@ -161,19 +179,32 @@ export async function peekStreamForContent(body, { deadlineMs = EMPTY_PEEK_DEADL
   const validDeadline = Number.isFinite(deadlineMs) && deadlineMs > 0 ? deadlineMs : EMPTY_PEEK_DEADLINE_MS;
   let timer = null;
   const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve("__deadline__"), validDeadline); });
-  const settle = (ret) => { if (timer) { clearTimeout(timer); timer = null; } return ret; };
+  let aliveTimer = null;
+  const aliveDeadline = Number.isFinite(aliveDeadlineMs) && aliveDeadlineMs > 0
+    ? new Promise((resolve) => { aliveTimer = setTimeout(() => resolve("__alive_deadline__"), aliveDeadlineMs); })
+    : null;
+  const settle = (ret) => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (aliveTimer) { clearTimeout(aliveTimer); aliveTimer = null; }
+    return ret;
+  };
 
   let pendingRead = null;
   while (true) {
     if (!pendingRead) pendingRead = reader.read();
     let res;
     try {
-      res = await Promise.race([pendingRead, deadline]);
+      res = await Promise.race(aliveDeadline && !state.alive ? [pendingRead, deadline, aliveDeadline] : [pendingRead, deadline]);
     } catch (err) {
       // Upstream errored mid-peek. Body is locked to this reader; hand it back so the caller
       // can reconstruct (the replay will surface the same error). The failed read is consumed.
       pendingRead = null;
       return settle({ outcome: state.sawContent ? "content" : "empty", timedOut: false, head: headChunks, reader, pendingRead: null, finishReason: state.finishReason, error: err });
+    }
+    if (res === "__alive_deadline__") {
+      // Budget spent without a single live frame: hung member. Hand the pending read back so
+      // the caller's cancel() releases the upstream cleanly.
+      return settle({ outcome: "stalled", timedOut: true, head: headChunks, reader, pendingRead, finishReason: state.finishReason });
     }
     if (res === "__deadline__") {
       // Fail-open: commit whatever we have. Hand the STILL-PENDING read to the caller so its

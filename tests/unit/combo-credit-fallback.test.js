@@ -22,7 +22,8 @@ describe("combo credit fallback", () => {
     });
 
     expect(response).toBe(shouldContinue ? success : failure);
-    expect(handleSingleModel.mock.calls).toEqual(
+    // (body, model) only — non-last members also receive a response-budget arg ({ deadlineAt }).
+    expect(handleSingleModel.mock.calls.map((call) => call.slice(0, 2))).toEqual(
       (shouldContinue ? models : models.slice(0, 1)).map((model) => [body, model])
     );
   });

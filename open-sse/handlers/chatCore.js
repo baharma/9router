@@ -61,7 +61,48 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, customPromptEnabled, customPrompt, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides }) {
+/**
+ * Per-attempt response budget for a combo member. Until `deadlineAt` the executor runs
+ * under a signal that also follows the client stream; at the deadline that signal aborts
+ * and run() rejects even if the executor ignores its signal (custom transports). A late
+ * response from such an executor is cancelled so it does not leak an open upstream.
+ * deadlineAt == null → passthrough (no budget, original signal).
+ */
+export function createAttemptBudget(deadlineAt, parentSignal) {
+  if (!Number.isFinite(deadlineAt)) {
+    return { signal: parentSignal, timedOut: false, run: (fn) => fn() };
+  }
+  const ctrl = new AbortController();
+  const signal = parentSignal ? AbortSignal.any([parentSignal, ctrl.signal]) : ctrl.signal;
+  const budget = {
+    signal,
+    timedOut: false,
+    async run(fn) {
+      let timer = null;
+      const expired = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          budget.timedOut = true;
+          const err = new Error("combo model budget exceeded");
+          err.name = "TimeoutError";
+          ctrl.abort(err);
+          reject(err);
+        }, Math.max(0, deadlineAt - Date.now()));
+      });
+      const work = Promise.resolve().then(fn);
+      try {
+        return await Promise.race([work, expired]);
+      } finally {
+        clearTimeout(timer);
+        if (budget.timedOut) {
+          work.then((r) => r?.response?.body?.cancel?.()).catch(() => { });
+        }
+      }
+    },
+  };
+  return budget;
+}
+
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, customPromptEnabled, customPrompt, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides, deadlineAt = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Stable per-session color so all lines of one CLI conversation share a tag
@@ -401,19 +442,23 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Most executors return their registry format. Cursor AgentService is an
   // exception: it is decoded by the executor into OpenAI-compatible output.
   let providerResponseFormat = targetFormat;
+  // Combo response budget (see COMBO_MODEL_TIMEOUT_MS): abandon this member if the upstream
+  // has not returned response headers by `deadlineAt`. Streaming only — a non-streaming
+  // upstream sends headers after the whole answer, so a deadline would cut long generations.
+  const attempt = createAttemptBudget(stream ? deadlineAt : null, streamController.signal);
   try {
-    const result = await executor.execute({
+    const result = await attempt.run(() => executor.execute({
       model,
       body: translatedBody,
       stream,
       credentials,
       providerSessionId: sessionSeed,
       clientTool,
-      signal: streamController.signal,
+      signal: attempt.signal,
       log,
       proxyOptions,
       providerOverrides,
-    });
+    }));
     providerResponse = result.response;
     providerUrl = result.url;
     providerHeaders = result.headers;
@@ -426,6 +471,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
   } catch (error) {
     trackPendingRequest(model, provider, connectionId, false, true);
+    if (attempt.timedOut) {
+      const waited = Date.now() - requestStartTime;
+      appendRequestLog({ model, provider, connectionId, status: `FAILED ${HTTP_STATUS.GATEWAY_TIMEOUT}` }).catch(() => { });
+      if (log?.errorLine) log.errorLine(reqTag, "✗", `TIMEOUT · ${provider}/${model} · ${waited}ms · no response within combo budget`);
+      return { ...createErrorResult(HTTP_STATUS.GATEWAY_TIMEOUT, `[${provider}/${model}] no response within ${waited}ms (combo budget)`), attemptTimedOut: true };
+    }
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId,

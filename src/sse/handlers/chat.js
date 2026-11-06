@@ -145,13 +145,14 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, requestContext),
+        (b, m, attempt) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, requestContext, attempt),
         adapterAdded
       ),
       log,
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      modelTimeoutMs: comboCfg.modelTimeoutMs,
       sessionId,
       smartPolicy: comboCfg.smartPolicy || "smart",
       sessionSticky: comboCfg.sessionSticky !== false,
@@ -177,7 +178,7 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       models: soloAugmented,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, requestContext),
+        (b, m, attempt) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, requestContext, attempt),
         adapterAdded
       ),
       log,
@@ -192,7 +193,7 @@ export async function handleChat(request, clientRawRequest = null) {
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, requestedModel, requestContext) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, requestedModel, requestContext, attempt = null) {
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -240,13 +241,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, requestContext),
+          (b, m, attempt) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, requestContext, attempt),
           adapterAdded
         ),
         log,
         comboName: modelStr,
         comboStrategy,
         comboStickyLimit,
+        modelTimeoutMs: comboCfg.modelTimeoutMs,
         sessionId: nestedSessionId,
         smartPolicy: comboCfg.smartPolicy || "smart",
         sessionSticky: comboCfg.sessionSticky !== false,
@@ -278,7 +280,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
   let lastStatus = null;
   let lastHeaders = null;
 
+  const deadlineAt = Number.isFinite(attempt?.deadlineAt) ? attempt.deadlineAt : null;
+
   while (true) {
+    // Combo budget spent on earlier accounts: hand the combo its next member instead.
+    if (deadlineAt && excludeConnectionIds.size > 0 && Date.now() >= deadlineAt) {
+      log.warn("CHAT", `[${provider}/${model}] combo budget spent after ${excludeConnectionIds.size} account(s) → next model`);
+      return errorResponse(lastStatus || HTTP_STATUS.GATEWAY_TIMEOUT, lastError || "combo budget spent", lastHeaders);
+    }
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model });
 
     // All accounts unavailable
@@ -343,6 +352,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
       providerThinking,
       // Per-provider user overrides (custom headers / connect timeout) from settings
       providerOverrides: (chatSettings.providerOverrides || {})[provider] || null,
+      deadlineAt,
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {
@@ -360,6 +370,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest, request, 
     });
 
     if (result.success) return result.response;
+
+    // Combo budget ran out on this member: not an account fault — no lock, no next account.
+    if (result.attemptTimedOut) return result.response;
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;

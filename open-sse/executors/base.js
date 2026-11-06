@@ -118,6 +118,7 @@ export class BaseExecutor {
         if (dynamic === false) return false; // hook vetoes retry (e.g. Retry-After too long)
         if (dynamic != null) waitMs = dynamic;
       }
+      if (signal?.aborted) return false; // caller gave up (client gone / combo budget spent)
       retryAttemptsByUrl[urlIndex]++;
       log?.debug?.("RETRY", `${reason} retry ${retryAttemptsByUrl[urlIndex]}/${attempts} after ${waitMs / 1000}s`);
       await new Promise(resolve => setTimeout(resolve, waitMs));
@@ -175,6 +176,9 @@ export class BaseExecutor {
         // reason — a plain Error, not an AbortError — so key off the signals, not error.name.
         const isConnectTimeout = connectCtrl.signal.aborted && !signal?.aborted;
         dbg("FETCH", `${this.provider.toUpperCase()} ✖ ${error.name}: ${error.message}${isConnectTimeout ? " (connect timeout)" : ""}`);
+        // The caller's signal aborted (client gone / combo budget spent): stop here, whatever
+        // the rejection's name — abort(reason) rejects with that reason, not an AbortError.
+        if (signal?.aborted) throw error;
         // Connect timeout is internal — convert to retryable network error, don't propagate AbortError
         if (error.name === "AbortError" && !isConnectTimeout) throw error;
 
