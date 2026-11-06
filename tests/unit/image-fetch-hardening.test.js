@@ -9,8 +9,9 @@ const lookupMock = vi.fn();
 // a bare record made every lookup fail, so private-IP cases passed for the wrong reason.
 vi.mock("node:dns/promises", () => ({
   lookup: async (host, opts) => {
-    const record = await lookupMock(host, opts);
-    return opts?.all ? [record] : record;
+    const result = await lookupMock(host, opts);
+    const records = Array.isArray(result) ? result : [result];
+    return opts?.all ? records : records[0];
   },
 }));
 
