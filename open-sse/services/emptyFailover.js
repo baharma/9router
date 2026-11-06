@@ -260,7 +260,9 @@ export async function peekStreamForContent(body, { deadlineMs = EMPTY_PEEK_DEADL
       if (textBuf) scanSSEBuffer(textBuf + "\n", state); // final line without a trailing newline
       if (!state.sawContent) {
         // Not SSE after all: a complete JSON document behind an event-stream content type.
-        const whole = headChunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
+        // Fresh decoder: the streaming one above may still hold a partial multi-byte sequence.
+        const wholeDecoder = new TextDecoder();
+        const whole = headChunks.map((c) => wholeDecoder.decode(c, { stream: true })).join("") + wholeDecoder.decode();
         if (whole.trimStart().startsWith("{")) {
           const info = inspectJsonBody(whole);
           if (info.content) state.sawContent = true;
