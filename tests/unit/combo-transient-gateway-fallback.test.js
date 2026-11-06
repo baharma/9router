@@ -24,10 +24,14 @@ describe("checkFallbackError — transient gateway statuses fall back", () => {
       .mockResolvedValueOnce(Response.json({ error: { message: "upstream stalled" } }, { status }))
       .mockResolvedValueOnce(success);
     const models = ["provider-a/model-a", "provider-b/model-b"];
-    expect(await handleComboChat({
+    const served = await handleComboChat({
       body: { messages: [{ role: "user", content: "hello" }] }, models, handleSingleModel,
       log: { info: vi.fn(), warn: vi.fn() }, comboStrategy: "fallback",
-    })).toBe(success);
+    });
+    // Served as a clone carrying x-9router-* route headers (#5313): compare what it carries.
+    expect(served.status).toBe(200);
+    expect(await served.json()).toEqual({ choices: [{ message: { content: "served by backup" } }] });
+    expect(served.headers.get("x-9router-model")).toBe("model-b");
     expect(handleSingleModel.mock.calls.map(([, model]) => model)).toEqual(models);
   });
 });
