@@ -105,3 +105,42 @@ describe("BaseExecutor.execute — computeRetryDelay hook veto", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("BaseExecutor.execute — connect timeout", () => {
+  // Upstream that never answers: settles only when the merged signal aborts.
+  const hang = (_url, opts) => new Promise((_, reject) => {
+    opts.signal.addEventListener("abort", () => reject(opts.signal.reason), { once: true });
+  });
+
+  it("does not retry a connect timeout on the same url (one timeout, then throw)", async () => {
+    const ex = makeExec({ baseUrl: "https://x/api", timeoutMs: 20, retry: { 502: { attempts: 3, delayMs: 0 } } });
+    fetchMock.mockImplementationOnce(hang);
+    let thrown = null;
+    try {
+      await ex.execute({ model: "m", body: {}, stream: false, credentials: creds });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown?.message).toBe("fetch connect timeout");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still falls over to the next url after a connect timeout", async () => {
+    const ex = makeExec({ baseUrls: ["https://a/api", "https://b/api"], timeoutMs: 20, retry: { 502: { attempts: 3, delayMs: 0 } } });
+    fetchMock.mockImplementationOnce(hang).mockResolvedValueOnce(res(200));
+    const out = await ex.execute({ model: "m", body: {}, stream: false, credentials: creds });
+    expect(out.response.status).toBe(200);
+    expect(out.url).toBe("https://b/api");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates a caller abort as-is (no retry)", async () => {
+    const ex = makeExec({ baseUrl: "https://x/api", timeoutMs: 5000, retry: { 502: { attempts: 3, delayMs: 0 } } });
+    const ctrl = new AbortController();
+    fetchMock.mockImplementationOnce(hang);
+    const p = ex.execute({ model: "m", body: {}, stream: false, credentials: creds, signal: ctrl.signal });
+    ctrl.abort();
+    await expect(p).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

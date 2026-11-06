@@ -171,13 +171,17 @@ export class BaseExecutor {
       } catch (error) {
         clearTimeout(connectTimer);
         lastError = error;
-        const isConnectTimeout = connectCtrl.signal.aborted && error.name === "AbortError";
+        // Our own timer fired (not the caller's signal). abort(reason) rejects with that
+        // reason — a plain Error, not an AbortError — so key off the signals, not error.name.
+        const isConnectTimeout = connectCtrl.signal.aborted && !signal?.aborted;
         dbg("FETCH", `${this.provider.toUpperCase()} ✖ ${error.name}: ${error.message}${isConnectTimeout ? " (connect timeout)" : ""}`);
         // Connect timeout is internal — convert to retryable network error, don't propagate AbortError
         if (error.name === "AbortError" && !isConnectTimeout) throw error;
 
-        // Map network/fetch exceptions to 502 retry config
-        if (await tryRetry(urlIndex, HTTP_STATUS.BAD_GATEWAY, `network "${error.message}"`)) { urlIndex--; continue; }
+        // Map network/fetch exceptions to 502 retry config. A connect timeout is NOT retried
+        // on the same url: each attempt already waited the full timeout, so retries would
+        // stall a combo for (attempts+1) × timeout before it can try the next model.
+        if (!isConnectTimeout && await tryRetry(urlIndex, HTTP_STATUS.BAD_GATEWAY, `network "${error.message}"`)) { urlIndex--; continue; }
 
         if (urlIndex + 1 < fallbackCount) {
           log?.debug?.("RETRY", `Error on ${url}, trying fallback ${urlIndex + 1}`);

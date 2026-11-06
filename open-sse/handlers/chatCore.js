@@ -241,6 +241,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Covers both passthrough (source shape) and translated (target shape) flows
   const finalFormat = passthrough ? sourceFormat : targetFormat;
 
+  // OpenAI chat bodies are forwarded as-is, so a client that omits `stream` reaches the
+  // upstream without it — and OpenAI-compatible upstreams default to a JSON reply. The
+  // response pipeline still follows `stream` (true when omitted) and wraps that JSON as
+  // SSE (+ "data: [DONE]"), which combo's empty-peek reads as "no-content". Pin the
+  // upstream flag to the decision; an explicit client value is left untouched.
+  if (finalFormat === FORMATS.OPENAI && typeof translatedBody.stream !== "boolean") {
+    translatedBody.stream = stream;
+  }
+
   // Request line: one correlated summary (fmt + thinking + counts + account)
   if (log?.line) {
     const clientModel = clientRawRequest?.body?.model || `${provider}/${model}`;
