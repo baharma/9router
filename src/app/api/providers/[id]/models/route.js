@@ -289,6 +289,7 @@ const PROVIDER_MODELS_CONFIG = {
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || []
   },
+  qwencloud: createOpenAIModelsConfig("https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1/models"),
   "alims-intl": {
     url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
     method: "GET",
