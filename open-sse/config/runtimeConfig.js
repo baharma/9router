@@ -90,19 +90,27 @@ export const COMBO_MODEL_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 10 * 1000;
 })();
 
-// Pooled keep-alive socket TTLs and undici agent parameters: cap idle socket lifetime
-// below upstream/edge idle windows (Cloudflare, AWS Global Accelerator / NVIDIA NIM)
-// and clamp keepAliveMaxTimeout so an upstream `Keep-Alive` header cannot extend it.
-export const DEFAULT_KEEPALIVE_TIMEOUT_MS = 30 * 1000;
+// Keep-alive socket TTL. Cap it below upstream/edge idle windows (Cloudflare, AWS Global
+// Accelerator / NVIDIA NIM) that drop idle sockets without a TCP RST. keepAliveMaxTimeout is
+// clamped to the same value so an upstream `Keep-Alive` header cannot extend it to 600s.
+export const DEFAULT_KEEPALIVE_TIMEOUT_MS = 4 * 1000;
 export const FRESH_RETRY_KEEPALIVE_TIMEOUT_MS = 1;
-export const DIRECT_AGENT_PIPELINING = 0;
 export const FETCH_KEEPALIVE_TIMEOUT_MS = envMs("FETCH_KEEPALIVE_TIMEOUT_MS", DEFAULT_KEEPALIVE_TIMEOUT_MS);
 
 export function resolveKeepAliveTimeouts() {
-  const timeout = envMs("FETCH_KEEPALIVE_TIMEOUT_MS", FETCH_KEEPALIVE_TIMEOUT_MS);
+  const timeout = envMs("FETCH_KEEPALIVE_TIMEOUT_MS", DEFAULT_KEEPALIVE_TIMEOUT_MS);
   return { keepAliveTimeout: timeout, keepAliveMaxTimeout: timeout };
 }
 
+// Escape hatch: FETCH_FRESH_RETRY=off disables the transport-level replay, leaving only the
+// executor's own retry path (which still forces a fresh socket). Defaults to on.
+export function isFreshSocketReplayEnabled() {
+  const raw = String(process.env.FETCH_FRESH_RETRY ?? "").trim().toLowerCase();
+  return !(raw === "off" || raw === "0" || raw === "false" || raw === "no");
+}
+
+// Dead keep-alive sockets surface as these codes/substrings; DNS, connect-refused and TLS
+// failures are excluded so a real unreachable host is never mistaken for a stale socket.
 export const STALE_SOCKET_ERROR_CODES = new Set([
   "UND_ERR_SOCKET",
   "ECONNRESET",
@@ -117,12 +125,14 @@ export const NON_STALE_SOCKET_ERROR_CODES = new Set([
   "EHOSTUNREACH",
   "ENETUNREACH",
   "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_INVALID_ARG",
 ]);
 
+// Deliberately excludes a bare "fetch failed": with no error code the upstream may already
+// hold the request, and replaying it would send (and bill) the same completion twice.
 export const STALE_SOCKET_ERROR_SUBSTRINGS = [
   "other side closed",
   "socket hang up",
-  "fetch failed",
 ];
 
 // Gemini native TTS fetch timeout: abort if Google does not return response headers in time.

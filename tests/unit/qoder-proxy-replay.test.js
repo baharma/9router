@@ -29,13 +29,17 @@ async function loadExecutor(fetchMock, useProxy = true) {
     vi.stubEnv(key, "");
   }
   if (useProxy) vi.stubEnv("HTTPS_PROXY", "http://proxy.test:3128");
-  // Exercise the real proxyAwareFetch: it captures fetch when imported.
-  vi.stubGlobal("fetch", fetchMock);
+  // Exercise the real proxyAwareFetch: it fetches through the package's own undici instance.
+  vi.doMock("undici", async () => {
+    const actual = await vi.importActual("undici");
+    return { ...actual, fetch: fetchMock };
+  });
   const { QoderExecutor } = await import("../../open-sse/executors/qoder.js");
   return new QoderExecutor();
 }
 
 afterEach(() => {
+  vi.doUnmock("undici");
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });

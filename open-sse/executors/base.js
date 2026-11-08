@@ -165,9 +165,8 @@ export class BaseExecutor {
         dbg("FETCH", `${this.provider.toUpperCase()} ← ${response.status} | ttft=${Date.now() - fetchT0}ms | ct=${ct} | cl=${cl}`);
 
         if (await tryRetry(urlIndex, response.status, `status ${response.status}`, response)) {
-          if (response.status === HTTP_STATUS.BAD_GATEWAY) {
-            forceFreshSocketByUrl[urlIndex] = true;
-          }
+          // A 502 from an edge is typically a poisoned keep-alive socket — retry fresh.
+          if (response.status === HTTP_STATUS.BAD_GATEWAY) forceFreshSocketByUrl[urlIndex] = true;
           urlIndex--;
           continue;
         }

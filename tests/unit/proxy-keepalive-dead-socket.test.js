@@ -7,6 +7,7 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
     vi.resetModules();
     process.env = { ...savedEnv };
     delete process.env.FETCH_KEEPALIVE_TIMEOUT_MS;
+    delete process.env.FETCH_FRESH_RETRY;
     delete process.env.HTTPS_PROXY;
     delete process.env.https_proxy;
     delete process.env.HTTP_PROXY;
@@ -17,16 +18,15 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
 
   afterEach(() => {
     process.env = { ...savedEnv };
+    vi.doUnmock("undici");
   });
 
-  it("caps default keep-alive TTL to 30s and clamps keepAliveMaxTimeout when FETCH_KEEPALIVE_TIMEOUT_MS is set", async () => {
+  it("keeps the existing 4s default, clamps keepAliveMaxTimeout, and honors FETCH_KEEPALIVE_TIMEOUT_MS", async () => {
     const { resolveKeepAliveTimeouts } = await import("../../open-sse/config/runtimeConfig.js");
-    const { resetDirectDispatchersForTests } = await import("../../open-sse/utils/proxyFetch.js");
-    resetDirectDispatchersForTests();
 
     expect(resolveKeepAliveTimeouts()).toEqual({
-      keepAliveTimeout: 30_000,
-      keepAliveMaxTimeout: 30_000,
+      keepAliveTimeout: 4_000,
+      keepAliveMaxTimeout: 4_000,
     });
 
     process.env.FETCH_KEEPALIVE_TIMEOUT_MS = "1";
@@ -56,7 +56,7 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
     expect(fresh1).not.toBe(direct1);
   });
 
-  it("classifies dead-socket errors (including bare fetch failed) and excludes aborts/DNS/TLS failures", async () => {
+  it("classifies only provable dead-socket errors and excludes aborts/DNS/TLS/bare fetch failed", async () => {
     const { isStaleSocketError } = await import("../../open-sse/utils/proxyFetch.js");
 
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }))).toBe(true);
@@ -64,79 +64,134 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "EPIPE" } }))).toBe(true);
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_HEADERS_TIMEOUT" } }))).toBe(true);
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: new Error("other side closed") }))).toBe(true);
-    expect(isStaleSocketError(new TypeError("fetch failed"))).toBe(true);
     expect(isStaleSocketError(new Error("socket hang up"))).toBe(true);
 
+    // A bare "fetch failed" with no code is ambiguous: the upstream may already have the
+    // request, so replaying it could double-charge. Never treat it as a stale socket.
+    expect(isStaleSocketError(new TypeError("fetch failed"))).toBe(false);
+    expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_INVALID_ARG" } }))).toBe(false);
     expect(isStaleSocketError(Object.assign(new Error("aborted"), { name: "AbortError", cause: { code: "UND_ERR_SOCKET" } }))).toBe(false);
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "ENOTFOUND" } }))).toBe(false);
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "SELF_SIGNED_CERT_IN_CHAIN" } }))).toBe(false);
     expect(isStaleSocketError(null)).toBe(false);
   });
 
-  it("retries once on the fresh-socket dispatcher when a pooled socket dies", async () => {
-    const mockFetch = vi.fn()
+  it("replays once on the fresh-socket dispatcher when a pooled socket dies", async () => {
+    const fetchMock = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }))
       .mockResolvedValueOnce({ status: 200, ok: true });
+    vi.doMock("undici", async () => {
+      const actual = await vi.importActual("undici");
+      return { ...actual, fetch: fetchMock };
+    });
 
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = mockFetch;
+    const {
+      proxyAwareFetch,
+      getDirectDispatcher,
+      getFreshRetryDispatcher,
+      resetDirectDispatchersForTests,
+    } = await import("../../open-sse/utils/proxyFetch.js");
+    resetDirectDispatchersForTests();
 
-    try {
-      const {
-        proxyAwareFetch,
-        getDirectDispatcher,
-        getFreshRetryDispatcher,
-        resetDirectDispatchersForTests,
-      } = await import("../../open-sse/utils/proxyFetch.js");
-      resetDirectDispatchersForTests();
+    const res = await proxyAwareFetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer nvapi-test" },
+      body: "{}",
+    });
 
-      const res = await proxyAwareFetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const directDispatcher = await getDirectDispatcher(false);
+    const freshDispatcher = await getFreshRetryDispatcher(false);
+
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBe(directDispatcher);
+    expect(fetchMock.mock.calls[1][1].dispatcher).toBe(freshDispatcher);
+    expect(fetchMock.mock.calls[1][1].headers).toEqual({ Authorization: "Bearer nvapi-test" });
+  });
+
+  it("does not replay on the fresh socket when the caller aborted or the body is a locked stream", async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValue(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }));
+    vi.doMock("undici", async () => {
+      const actual = await vi.importActual("undici");
+      return { ...actual, fetch: fetchMock };
+    });
+
+    const { proxyAwareFetch, resetDirectDispatchersForTests } = await import("../../open-sse/utils/proxyFetch.js");
+    resetDirectDispatchersForTests();
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      proxyAwareFetch("https://integrate.api.nvidia.com/v1/chat/completions", {
         method: "POST",
-        headers: { Authorization: "Bearer nvapi-test" },
         body: "{}",
-      });
+        signal: controller.signal,
+      })
+    ).rejects.toThrow(/fetch failed/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
-      expect(res.status).toBe(200);
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+  it("does not replay on an ambiguous bare fetch failed (request may have been served)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    vi.doMock("undici", async () => {
+      const actual = await vi.importActual("undici");
+      return { ...actual, fetch: fetchMock };
+    });
 
-      const directDispatcher = await getDirectDispatcher(false);
-      const freshDispatcher = await getFreshRetryDispatcher(false);
+    const { proxyAwareFetch, resetDirectDispatchersForTests } = await import("../../open-sse/utils/proxyFetch.js");
+    resetDirectDispatchersForTests();
 
-      expect(mockFetch.mock.calls[0][1].dispatcher).toBe(directDispatcher);
-      expect(mockFetch.mock.calls[1][1].dispatcher).toBe(freshDispatcher);
-      expect(mockFetch.mock.calls[1][1].headers).toEqual({
-        Authorization: "Bearer nvapi-test",
-      });
-    } finally {
-      globalThis.fetch = origFetch;
-    }
+    await expect(
+      proxyAwareFetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+        method: "POST",
+        body: "{}",
+      })
+    ).rejects.toThrow(/fetch failed/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay when FETCH_FRESH_RETRY=off", async () => {
+    process.env.FETCH_FRESH_RETRY = "off";
+    const fetchMock = vi.fn()
+      .mockRejectedValue(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }));
+    vi.doMock("undici", async () => {
+      const actual = await vi.importActual("undici");
+      return { ...actual, fetch: fetchMock };
+    });
+
+    const { proxyAwareFetch, resetDirectDispatchersForTests } = await import("../../open-sse/utils/proxyFetch.js");
+    resetDirectDispatchersForTests();
+
+    await expect(
+      proxyAwareFetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+        method: "POST",
+        body: "{}",
+      })
+    ).rejects.toThrow(/fetch failed/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the fresh-socket dispatcher immediately when forceFreshSocket is requested", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({ status: 200, ok: true });
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = mockFetch;
+    const fetchMock = vi.fn().mockResolvedValueOnce({ status: 200, ok: true });
+    vi.doMock("undici", async () => {
+      const actual = await vi.importActual("undici");
+      return { ...actual, fetch: fetchMock };
+    });
 
-    try {
-      const {
-        proxyAwareFetch,
-        getFreshRetryDispatcher,
-        resetDirectDispatchersForTests,
-      } = await import("../../open-sse/utils/proxyFetch.js");
-      resetDirectDispatchersForTests();
+    const { proxyAwareFetch, getFreshRetryDispatcher, resetDirectDispatchersForTests } = await import("../../open-sse/utils/proxyFetch.js");
+    resetDirectDispatchersForTests();
 
-      await proxyAwareFetch(
-        "https://integrate.api.nvidia.com/v1/chat/completions",
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
-        { forceFreshSocket: true }
-      );
+    await proxyAwareFetch(
+      "https://integrate.api.nvidia.com/v1/chat/completions",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+      { forceFreshSocket: true }
+    );
 
-      const freshDispatcher = await getFreshRetryDispatcher(false);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(mockFetch.mock.calls[0][1].dispatcher).toBe(freshDispatcher);
-    } finally {
-      globalThis.fetch = origFetch;
-    }
+    const freshDispatcher = await getFreshRetryDispatcher(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBe(freshDispatcher);
   });
 
   // A connect timeout is not retried on the same url (combo moves on; see base-executor-retry);
