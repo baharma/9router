@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
 import PropTypes from "prop-types";
 import Card from "@/shared/components/Card";
 import Badge from "@/shared/components/Badge";
+import { formatDuration, formatSpeed } from "@/shared/utils/usageLatency";
 
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
 const fmtCost = (n) => `$${(n || 0).toFixed(2)}`;
@@ -28,10 +29,28 @@ SortIcon.propTypes = {
   currentOrder: PropTypes.string.isRequired,
 };
 
+const LATENCY_HINT = "Not measured — usage recorded before latency tracking, or a non-chat request";
+
 /**
- * Render 3 token or cost cells based on viewMode
+ * Render the 4 value cells (tokens, costs or latency) based on viewMode
  */
 function ValueCells({ item, viewMode, isSummary = false }) {
+  if (viewMode === "latency") {
+    const measured = item.avgDurationMs != null;
+    const cell = (value, extra = "") => (
+      <td className={`px-6 py-3 text-right whitespace-nowrap ${extra}`} title={measured ? undefined : LATENCY_HINT}>
+        {value}
+      </td>
+    );
+    return (
+      <>
+        {cell(item.avgTtftMs != null ? formatDuration(item.avgTtftMs) : "—", "text-text-muted")}
+        {cell(measured ? formatDuration(item.avgDurationMs) : "—", "font-medium")}
+        {cell(formatSpeed(item.tokensPerSec), "text-text-muted")}
+        {cell(item.maxDurationMs != null ? formatDuration(item.maxDurationMs) : "—", "text-text-muted")}
+      </>
+    );
+  }
   if (viewMode === "tokens") {
     return (
       <>
@@ -85,7 +104,7 @@ ValueCells.propTypes = {
  * @param {string} props.sortBy - Current sort field
  * @param {string} props.sortOrder - Current sort order
  * @param {function} props.onToggleSort - Sort toggle handler
- * @param {string} props.viewMode - "tokens" or "costs"
+ * @param {string} props.viewMode - "tokens", "costs" or "latency"
  * @param {string} props.storageKey - localStorage key for expanded state
  * @param {function} props.renderGroupLabel - Render group summary first cell content
  * @param {function} props.renderDetailCells - Render detail row custom cells (before value cells)
@@ -136,6 +155,14 @@ export default function UsageTable({
   }, []);
 
   const valueColumns = useMemo(() => {
+    if (viewMode === "latency") {
+      return [
+        { field: "avgTtftMs", label: "Avg TTFT", hint: "Average time to first token (streamed requests)" },
+        { field: "avgDurationMs", label: "Avg Duration", hint: "Average time from request start to the last byte" },
+        { field: "tokensPerSec", label: "Speed", hint: "Output tokens per second while generating" },
+        { field: "maxDurationMs", label: "Slowest", hint: "Longest single request in this period" },
+      ];
+    }
     if (viewMode === "tokens") {
       return [
         { field: "promptTokens", label: "Input Tokens" },
@@ -177,6 +204,7 @@ export default function UsageTable({
                 <th
                   key={col.field}
                   className="px-6 py-3 text-right cursor-pointer hover:bg-bg-subtle/50"
+                  title={col.hint}
                   onClick={() => onToggleSort(tableType, col.field)}
                 >
                   {col.label}{" "}
