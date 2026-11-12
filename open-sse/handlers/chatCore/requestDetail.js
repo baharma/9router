@@ -1,6 +1,6 @@
 import { saveRequestUsage, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { COLORS } from "../../utils/stream.js";
-import { canonicalizeUsage } from "../../utils/usageTracking.js";
+import { canonicalizeUsage, reasoningIsSubsetOfOutput } from "../../utils/usageTracking.js";
 import { normalizeLatency } from "../../../src/shared/utils/usageLatency.js";
 
 const OPTIONAL_PARAMS = [
@@ -47,7 +47,9 @@ export function extractUsageFromResponse(responseBody) {
       prompt_tokens: responseBody.usage.prompt_tokens || 0,
       completion_tokens: responseBody.usage.completion_tokens || 0,
       cached_tokens: responseBody.usage.cached_tokens ?? responseBody.usage.prompt_tokens_details?.cached_tokens,
-      reasoning_tokens: responseBody.usage.completion_tokens_details?.reasoning_tokens
+      reasoning_tokens: responseBody.usage.completion_tokens_details?.reasoning_tokens,
+      // completion_tokens already contains the reasoning slice; price it once.
+      ...(reasoningIsSubsetOfOutput(responseBody.usage) ? { reasoning_included_in_output: 1 } : {})
     };
   }
 
