@@ -216,6 +216,9 @@ export function createSSEStream(options = {}) {
             continue;
           }
 
+          // Upstream already sent the sentinel; flush() must not append a second one.
+          if (trimmed.startsWith("data:") && trimmed.slice(5).trim() === "[DONE]") streamDoneSent = true;
+
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
               let parsed = JSON.parse(trimmed.slice(5).trim());
@@ -538,8 +541,13 @@ export function createSSEStream(options = {}) {
           // OpenAI-SDK crash the transform guards against. Drop only framing
           // fields; any residual data line (or NDJSON tail, e.g. Ollama) still
           // has to go through like before.
-          const leftover = buffer.trim();
-          if (leftover && !/^(id|retry|event)\s*:/.test(leftover)) {
+          // An unterminated trailing "data: [DONE]" is the upstream sentinel: don't
+          // forward it raw (it would glue onto the properly framed one appended
+          // below, #5592).
+          const tail = buffer.trim();
+          const tailIsDone = tail.startsWith("data:") && tail.slice(5).trim() === "[DONE]";
+          const tailIsFraming = /^(id|retry|event)\s*:/.test(tail);
+          if (buffer && !tailIsDone && !tailIsFraming) {
             let output = buffer;
             if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
               output = "data: " + buffer.slice(5);

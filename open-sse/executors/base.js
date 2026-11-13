@@ -97,7 +97,7 @@ export class BaseExecutor {
     return { status: response.status, message: bodyText || `HTTP ${response.status}` };
   }
 
-  async execute({ model, body, stream, credentials, signal, log, proxyOptions = null, providerOverrides = null, directFetch = null, fingerprintFetch = null }) {
+  async execute({ model, body, stream, credentials, signal, log, proxyOptions = null, providerOverrides = null, directFetch = null }) {
     const fallbackCount = this.getFallbackCount();
     let lastError = null;
     let lastStatus = 0;
@@ -154,10 +154,9 @@ export class BaseExecutor {
           body: bodyStr,
           signal: mergedSignal,
           // Protocol adapters that need their own transport override the direct
-          // path (proxies still take priority); fingerprintFetch (opencode's TLS
-          // ClientHello) also carries the proxied hop.
+          // path; a `proxyCapable` adapter (opencode's wreq-js) also carries the
+          // proxied hop (see proxyAwareFetch).
           ...(directFetch ? { directFetch } : {}),
-          ...(fingerprintFetch ? { fingerprintFetch } : {}),
         }, effectiveProxyOptions);
         clearTimeout(connectTimer);
         const ct = response.headers?.get?.("content-type") || "";
