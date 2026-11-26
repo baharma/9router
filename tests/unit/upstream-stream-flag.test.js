@@ -117,7 +117,7 @@ function makeOptions({ bodyStream, accept } = {}) {
 
   return {
     body,
-    modelInfo: { provider: "qwencloud", model: "qwen3.8-flash" },
+    modelInfo: { provider: "qwencloud-sg", model: "qwen3.8-flash" },
     credentials: { apiKey: "sk-test" },
     clientRawRequest: { endpoint: "/v1/chat/completions", body, headers },
     connectionId: "test-connection",

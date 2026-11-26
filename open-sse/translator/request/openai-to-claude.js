@@ -4,6 +4,7 @@ import { CLAUDE_SYSTEM_PROMPT } from "../../config/appConstants.js";
 import { adjustMaxTokens } from "../formats/maxTokens.js";
 import { safeParseJSON } from "../concerns/json.js";
 import { parseDataUri } from "../concerns/image.js";
+import { stripAnthropicBillingHeader } from "../concerns/message.js";
 import { extractTextContent } from "../formats/gemini.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
@@ -40,7 +41,10 @@ export function openaiToClaudeRequest(model, body, stream) {
     const isSystemRole = (role) => role === ROLE.SYSTEM || role === ROLE.DEVELOPER;
     for (const msg of body.messages) {
       if (isSystemRole(msg.role)) {
-        systemParts.push(typeof msg.content === "string" ? msg.content : extractTextContent(msg.content, "\n"));
+        const textParts = Array.isArray(msg.content)
+          ? msg.content.filter(part => part.type === OPENAI_BLOCK.TEXT).map(part => part.text)
+          : [extractTextContent(msg.content, "\n")];
+        systemParts.push(...textParts.map(stripAnthropicBillingHeader).filter(Boolean));
       }
     }
 
