@@ -8,6 +8,7 @@ import { QoderExecutor } from "./qoder.js";
 import { KiroExecutor } from "./kiro.js";
 import { KimchiExecutor } from "./kimchi.js";
 import { KimiExecutor } from "./kimi.js";
+import { QwenCloudExecutor } from "./qwencloud.js";
 import { CodexExecutor } from "./codex.js";
 import { CursorExecutor } from "./cursor.js";
 import { VertexExecutor } from "./vertex.js";
@@ -48,6 +49,7 @@ const executors = {
   kiro: new KiroExecutor(),
   kimchi: new KimchiExecutor(),
   kimi: new KimiExecutor(),
+  qwencloud: new QwenCloudExecutor(),
   codex: new CodexExecutor(),
   cursor: new CursorExecutor(),
   cu: new CursorExecutor(), // Alias for cursor
@@ -114,6 +116,7 @@ export { QoderExecutor } from "./qoder.js";
 export { KiroExecutor } from "./kiro.js";
 export { KimchiExecutor } from "./kimchi.js";
 export { KimiExecutor } from "./kimi.js";
+export { QwenCloudExecutor } from "./qwencloud.js";
 export { CodexExecutor } from "./codex.js";
 export { CursorExecutor } from "./cursor.js";
 export { VertexExecutor } from "./vertex.js";

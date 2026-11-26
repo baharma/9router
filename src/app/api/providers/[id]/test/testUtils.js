@@ -8,6 +8,7 @@ import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import { probeAssemblyAiKey } from "open-sse/services/assemblyai.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
 import { createKimiApiKeyProbe, isKimiApiKeyAccepted } from "open-sse/services/kimi.js";
+import { getQwenCloudModelsUrl } from "open-sse/services/qwencloud.js";
 import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 import { buildKiroIdentityHeaders } from "open-sse/shared/kiroIdentity.js";
 import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
@@ -708,6 +709,13 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
           method: "POST",
           headers: { "x-api-key": connection.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
           body: JSON.stringify({ model: "minimax-m2", max_tokens: 1, messages: [{ role: "user", content: "test" }] }),
+        }, effectiveProxy);
+        const valid = res.status !== 401 && res.status !== 403;
+        return { valid, error: valid ? null : "Invalid API key" };
+      }
+      case "qwencloud": {
+        const res = await fetchWithConnectionProxy(getQwenCloudModelsUrl(connection.apiKey), {
+          headers: { Authorization: `Bearer ${connection.apiKey}` },
         }, effectiveProxy);
         const valid = res.status !== 401 && res.status !== 403;
         return { valid, error: valid ? null : "Invalid API key" };

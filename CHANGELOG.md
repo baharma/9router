@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Fixes
+- **QwenCloud**: route `qwencloud` by key type — Token Plan keys (`sk-sp-`) stay on `token-plan.maas.qwencloudapi.com`, pay-as-you-go/workspace keys (`sk-`, `sk-ws-`) go to `ap-southeast-1.maas.qwencloudapi.com` on the same OpenAI, Anthropic and Responses paths. Connections saved as `qwencloud` before the v0.5.123 sync (when that id meant the Singapore lane) were getting 401 `invalid_api_key` from the Token Plan host. Key validation and the connection test probe the matching host.
 - **Upstream PR batch**: cherry-picked 30 open decolua/9router fixes —
   - Auth/server: OIDC start accepts the generic `sso` mode, so "OIDC only" no longer locks admins out (#5851); h2c downgrade detaches and closes its socket (#5839); happy-eyeballs attempt budget raised to 1s for high-RTT links (#5767); app services boot from `instrumentation.js` instead of the first page render (#5829); update notifications can be turned off (#5711); the tray child no longer SIGKILLs its parent (#5712).
   - Translator/stream: Claude cache usage reaches OpenAI-format clients (#5743); provider effort is converted for native Claude passthrough (#5878); a client's 1h cache TTL survives breakpoint re-anchoring (#5860); `reasoning_effort` is nested for openai-compatible Responses nodes (#5669); the failed retry response is kept after a credential refresh (#5793).

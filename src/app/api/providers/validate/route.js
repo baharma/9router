@@ -16,6 +16,7 @@ import {
 } from "open-sse/services/nous.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 import { createKimiApiKeyProbe, isKimiApiKeyAccepted } from "open-sse/services/kimi.js";
+import { getQwenCloudModelsUrl } from "open-sse/services/qwencloud.js";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -379,6 +380,15 @@ export async function POST(request) {
             // 400 = model resolution error but auth passed (e.g. agentrouter "no available channel")
             isValid = res.status !== 401 && res.status !== 403;
           }
+          break;
+        }
+        case "qwencloud": {
+          // Plan keys (sk-sp-) live on token-plan, other keys on the regional host.
+          const res = await fetch(getQwenCloudModelsUrl(apiKey), {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(8000),
+          });
+          isValid = res.status !== 401 && res.status !== 403;
           break;
         }
         case "kimi": {
