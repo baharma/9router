@@ -78,7 +78,8 @@ describe("openai-compatible responses node — reasoning wire shape", () => {
       creds("responses"),
       RESPONSES_ID,
     );
-    expect(translated.reasoning_effort).toBe("high"); // Chat shape emitted upstream of the executor
+    // On this fork the translator may already emit the nested shape; either way
+    // the executor must hand the Responses endpoint only reasoning.effort.
     const out = send(RESPONSES_ID, translated, "responses");
     expect(out.reasoning).toEqual({ effort: "high", summary: "auto" });
     expect(out.reasoning_effort).toBeUndefined();

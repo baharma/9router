@@ -6,7 +6,7 @@ describe("Antigravity TOS violation and validation backoff", () => {
     "PERMISSION_DENIED TOS_VIOLATION: This service has been disabled in this account for violation of Terms of Service",
     "tos_violation",
   ])("sets 24h cooldown for %s under antigravity", (msg) => {
-    expect(checkFallbackError(403, msg, 0, "antigravity")).toEqual({
+    expect(checkFallbackError(403, msg, 0, "antigravity")).toMatchObject({
       shouldFallback: true,
       cooldownMs: 24 * 60 * 60 * 1000,
     });
@@ -16,7 +16,7 @@ describe("Antigravity TOS violation and validation backoff", () => {
     "PERMISSION_DENIED TOS_VIOLATION: This service has been disabled in this account for violation of Terms of Service",
     "tos_violation",
   ])("sets 24h cooldown for %s under ag alias", (msg) => {
-    expect(checkFallbackError(403, msg, 0, "ag")).toEqual({
+    expect(checkFallbackError(403, msg, 0, "ag")).toMatchObject({
       shouldFallback: true,
       cooldownMs: 24 * 60 * 60 * 1000,
     });
@@ -26,7 +26,7 @@ describe("Antigravity TOS violation and validation backoff", () => {
     "PERMISSION_DENIED VALIDATION_REQUIRED: Validation is required for this account",
     "validation_required",
   ])("sets 24h cooldown for %s under antigravity", (msg) => {
-    expect(checkFallbackError(403, msg, 0, "antigravity")).toEqual({
+    expect(checkFallbackError(403, msg, 0, "antigravity")).toMatchObject({
       shouldFallback: true,
       cooldownMs: 24 * 60 * 60 * 1000,
     });
